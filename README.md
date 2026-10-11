@@ -257,15 +257,6 @@ Exemple de corps JSON pour `POST /api/match` :
 
 L'application React est dans `frontend/`. Elle propose une recherche par poste, ville et mode de travail, puis affiche les recommandations renvoyees par l'API Flask. Les parametres de requete de l'interface sont actuellement definis dans `frontend/src/App.tsx`.
 
-## Depannage et limites connues
-
-- Les jeux de donnees et les modeles `.pkl` ne sont pas inclus dans le depot. Ils sont exclus par `.gitignore` ; fournir les donnees requises localement avant de lancer le moteur de matching.
-- Le demarrage du moteur de matching depend de la disponibilite de donnees utilisables dans PostgreSQL ou du fichier JSON de repli attendu par le modele.
-- L'image Docker du moteur de matching reference actuellement des fichiers absents du depot (`job_matcher_model.py` et `job_matcher_v2.pkl`). Un lancement complet de Compose depuis un clone vierge necessite donc de corriger cette image et de fournir les donnees ou le modele attendus.
-- Les variables `JOB_MATCHER_DATA_FILE` et `JOB_MATCHER_MODEL_FILE` presentes dans `.env.example` ne sont pas encore lues par le code du moteur.
-- France Travail reste desactive par defaut et ne peut fonctionner sans ses identifiants API.
-- Si un service ne demarre pas, consulter ses journaux avec `docker compose logs -f <nom-du-service>`.
-- Les ports `5432`, `8000`, `8081`, `9000`, `9001` et `5001` doivent etre libres sur la machine.
 
 ## Contribution
 
