@@ -13,7 +13,6 @@ Plateforme de collecte et d'analyse d'offres d'emploi au Maroc et en France. Le 
 - [Configuration](#configuration)
 - [API](#api)
 - [Interface web](#interface-web)
-- [Depannage et limites connues](#depannage-et-limites-connues)
 - [Contribution](#contribution)
 
 ## Fonctionnalites
