@@ -1,294 +1,275 @@
 # Job Intelligence Platform
 
-An end-to-end data platform that scrapes job listings from multiple sources across Morocco and France, stores them in a warehouse + lakehouse architecture, and serves them through analytics APIs and an AI-powered job matching frontend.
+Plateforme de collecte et d'analyse d'offres d'emploi au Maroc et en France. Le projet combine des scrapers, un pipeline orchestre par Apache Airflow, un entrepot PostgreSQL, un data lake MinIO, des API et une interface React de recherche et de recommandation.
 
-![System Architecture](architecture.png)
+![Architecture de la plateforme](architecture.png)
 
----
+## Sommaire
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
+- [Fonctionnalites](#fonctionnalites)
+- [Architecture et flux de donnees](#architecture-et-flux-de-donnees)
+- [Structure du depot](#structure-du-depot)
+- [Demarrage](#demarrage)
 - [Configuration](#configuration)
-- [API Reference](#api-reference)
-- [ML Job Matcher](#ml-job-matcher)
-- [Frontend](#frontend)
-- [Pipeline Details](#pipeline-details)
+- [API](#api)
+- [Interface web](#interface-web)
+- [Depannage et limites connues](#depannage-et-limites-connues)
+- [Contribution](#contribution)
 
----
+## Fonctionnalites
 
-## Overview
+- Collecte d'offres depuis Indeed, LinkedIn, Rekrute, Emploi.ma et France Travail.
+- Orchestration quotidienne du pipeline avec Airflow.
+- Stockage analytique dans PostgreSQL et stockage objet compatible S3 avec MinIO.
+- API FastAPI pour consulter les offres, les statistiques et l'etat du pipeline.
+- API Flask et modele de recommandation de postes.
+- Interface React/TypeScript pour rechercher des offres et consulter les correspondances.
 
-The platform automates the full lifecycle of job market intelligence:
+## Architecture et flux de donnees
 
-1. **Scrape** job listings daily from Indeed, LinkedIn, Rekrute, Emploi.ma, and France Travail
-2. **Store** raw data in a MinIO data lake (Bronze/Silver/Gold layers) and a PostgreSQL data warehouse
-3. **Orchestrate** the pipeline with Apache Airflow (scheduled daily at 05:00 UTC)
-4. **Serve** analytics through a FastAPI service and ML-powered job matching through a Flask API
-5. **Visualize** results in a React frontend with search, filters, and ranked job recommendations
-
----
-
-## Architecture
-
-The system is composed of five layers:
-
-| Layer | Components |
-|-------|------------|
-| **Data Sources** | Indeed, LinkedIn, Rekrute, Emploi.ma, France Travail API |
-| **Orchestration** | Apache Airflow DAG with 6 tasks (CeleryExecutor + Redis) |
-| **Storage** | PostgreSQL warehouse (`jobs_dw` schema) + MinIO data lake (`jobs-lake` bucket) |
-| **Serving** | FastAPI analytics API (port 8000) + Flask ML matcher API (port 5001) |
-| **Frontend** | React + TypeScript app with job search and AI-ranked matching |
-
-### Airflow DAG: `jobs_intelligence_pipeline`
-
-```
-scrape_jobs -> publish_to_lake -> load_raw -> upsert_dim_jobs -> export_lake_curated -> log_run
+```text
+Sources d'emploi
+      |
+      v
+Scrapers -> fichier JSON de travail
+      |
+      +----> MinIO : bronze -> silver -> gold
+      |
+      v
+PostgreSQL : jobs_dw.raw_jobs -> jobs_dw.dim_jobs -> vues analytiques
+      |
+      +----> API FastAPI (port 8000)
+      +----> API de recommandation Flask (port 5001)
+                         |
+                         v
+                 Interface React (port 5173)
 ```
 
-- **Schedule:** daily at 05:00 UTC
-- **Retries:** 2 (10 min delay)
-- **Max active runs:** 1
+Le DAG `jobs_intelligence_pipeline` est programme chaque jour a 05:00 UTC. Il collecte les offres, alimente le data lake et l'entrepot, exporte les donnees curatees, relance l'entrainement du modele et enregistre le resultat du pipeline.
 
-### Storage Schema
+Les donnees PostgreSQL se trouvent dans le schema `jobs_dw`. Les vues utilisees par l'API comprennent `vw_latest_jobs`, `vw_skill_mentions`, `vw_jobs_by_category_city`, `vw_salary_stats` et `vw_pipeline_health`.
 
-**PostgreSQL (`jobs_dw`):**
-- `raw_jobs` - raw ingested data
-- `dim_jobs` - deduplicated, enriched dimension table
-- `pipeline_runs` - execution metadata
+## Structure du depot
 
-**Analytics views:**
-- `vw_latest_jobs` - most recent job listings
-- `vw_skill_mentions` - skill extraction and counts
-- `vw_jobs_by_category_city` - category/city breakdown
-- `vw_salary_stats` - salary analytics
-- `vw_pipeline_health` - pipeline run monitoring
-
-**MinIO Data Lake (`jobs-lake`):**
-- `bronze/` - raw snapshots (JSON/Parquet)
-- `silver/` - cleaned dim_jobs snapshots
-- `gold/` - curated `vw_latest_jobs` exports
-
----
-
-## Tech Stack
-
-| Category | Technology |
-|----------|------------|
-| Orchestration | Apache Airflow 3.x, Celery, Redis |
-| Database | PostgreSQL |
-| Object Storage | MinIO (S3-compatible) |
-| Analytics API | FastAPI, SQLAlchemy, Uvicorn |
-| ML Matcher API | Flask, scikit-learn, GradientBoostingClassifier, TF-IDF |
-| Scraping | BeautifulSoup, Requests, JobSpy |
-| Frontend | React, TypeScript, Vite |
-| Infrastructure | Docker, Docker Compose |
-| Data Processing | Pandas, NumPy, boto3 |
-
----
-
-## Project Structure
-
-```
+```text
 .
-├── dags/
-│   └── jobs_pipeline_dag.py      # Airflow DAG definition
-├── scraper/
-│   ├── job_sources.py            # Multi-source scraper orchestrator
-│   └── sources/
-│       ├── common.py             # Shared utilities, search terms, categories
-│       ├── indeed.py             # Indeed scraper
-│       ├── linkedin.py           # LinkedIn scraper
-│       ├── rekrute.py            # Rekrute scraper
-│       ├── emploi_ma.py          # Emploi.ma scraper
-│       └── france_travail.py     # France Travail API client
 ├── api/
-│   ├── main.py                   # FastAPI analytics service
-│   ├── requirements.txt
-│   └── Dockerfile
-├── job_matcher_model_v2.py       # ML model training & inference
-├── api_server.py                 # Flask matcher API server
+│   ├── Dockerfile               # Image du service FastAPI
+│   ├── main.py                  # Routes analytiques et connexion a PostgreSQL/MinIO
+│   └── requirements.txt         # Dependances Python de l'API FastAPI
+├── dags/
+│   ├── .airflowignore           # Exclusions de fichiers pour la decouverte Airflow
+│   └── jobs_pipeline_dag.py     # Orchestration Airflow de la collecte au retraining
+├── data/
+│   └── .gitkeep                 # Garde le dossier vide dans Git ; les donnees restent locales
 ├── frontend/
-│   └── src/
-│       ├── App.tsx               # React frontend
-│       └── App.css
-├── docker-compose.yaml           # Full stack deployment
-├── Dockerfile.airflow            # Custom Airflow image
-├── Dockerfile.matcher            # Matcher API image
-├── requirements-airflow.txt      # Airflow Python dependencies
-├── requirements-matcher.txt      # Matcher Python dependencies
-├── .env.example                  # Environment variable template
-└── docs/                         # Project documentation
+│   ├── public/
+│   │   ├── favicon.svg          # Favicon de l'application web
+│   │   └── icons.svg            # Sprite SVG statique, non reference actuellement
+│   ├── src/
+│   │   ├── assets/
+│   │   │   └── hero.png         # Visuel importe, mais non affiche actuellement
+│   │   ├── App.css              # Styles de l'interface principale
+│   │   ├── App.tsx              # Ecran de recherche et affichage des recommandations
+│   │   ├── index.css            # Styles globaux
+│   │   └── main.tsx             # Point d'entree React
+│   ├── .env.example             # Exemple de configuration frontend
+│   ├── .gitignore               # Exclusions Git propres au frontend
+│   ├── eslint.config.js         # Regles de lint JavaScript/TypeScript
+│   ├── index.html               # Document HTML racine de Vite
+│   ├── package.json             # Dependances et commandes npm
+│   ├── package-lock.json        # Versions verrouillees des dependances npm
+│   ├── tsconfig.app.json        # Configuration TypeScript de l'application
+│   ├── tsconfig.json            # Configuration TypeScript racine et references
+│   ├── tsconfig.node.json       # Configuration TypeScript des fichiers Node/Vite
+│   └── vite.config.ts           # Configuration du serveur et du build Vite
+├── scraper/
+│   ├── sources/
+│   │   ├── __init__.py          # Marque le dossier comme package Python
+│   │   ├── common.py            # Normalisation, classification et utilitaires partages
+│   │   ├── emploi_ma.py         # Collecte des offres depuis Emploi.ma
+│   │   ├── france_travail.py    # Client de l'API France Travail
+│   │   ├── indeed.py            # Connecteur Indeed via JobSpy
+│   │   ├── jobspy_common.py     # Logique JobSpy partagee (Indeed et LinkedIn)
+│   │   ├── linkedin.py          # Connecteur LinkedIn via JobSpy
+│   │   └── rekrute.py           # Collecte des offres depuis Rekrute
+│   ├── indeed_scraper.py        # Module de compatibilite importe par le DAG
+│   └── job_sources.py           # Active les sources, execute et deduplique les collectes
+├── sql/
+│   └── init_jobs_dw.sql         # Definition du schema, tables et vues analytiques
+├── .env.example                 # Variables d'environnement d'exemple pour Compose
+├── .gitattributes               # Regles de fins de ligne et fichiers binaires pour Git
+├── .gitignore                   # Fichiers locaux, secrets, donnees et artefacts exclus de Git
+├── api_server.py                # API Flask : filtres, matching, sante et retraining
+├── architecture.png             # Diagramme d'architecture affiche dans ce README
+├── docker-compose.jobs.yaml     # Variante Compose pour les services du pipeline et du matching
+├── docker-compose.yaml          # Definition principale des services Docker
+├── Dockerfile.airflow           # Image Airflow avec dependances du pipeline
+├── Dockerfile.matcher           # Image de l'API de matching et de son modele
+├── job_matcher_model_v2.py      # Chargement des donnees, entrainement et inference ML
+├── requirements-airflow.txt     # Dependances Python des scrapers et du DAG
+├── requirements-matcher.txt     # Dependances Python du modele et de l'API Flask
+└── test_api.py                  # Exemple manuel de requete vers l'API de matching
 ```
 
----
+Les fichiers de configuration et les donnees d'execution locales sont volontairement separes du code : `.env` et les fichiers de donnees ne doivent pas etre publies sur GitHub. `package-lock.json` sert a installer des versions reproductibles des dependances frontend. A noter : `hero.png` est importe dans `App.tsx`, mais la variable importee n'est pas utilisee ; le sprite `icons.svg` n'a pas non plus de reference dans le frontend.
 
-## Getting Started
+## Demarrage
 
-### Prerequisites
+### Prerequis
 
-- Docker & Docker Compose
-- At least 4 GB of free RAM (Airflow + supporting services)
+- Docker Desktop avec Docker Compose
+- Node.js et npm pour lancer l'interface en mode developpement
+- Au moins 4 Go de memoire disponible pour les services Airflow
+- Des identifiants France Travail si cette source est activee
 
-### 1. Clone and configure
+### 1. Cloner et configurer le depot
 
 ```bash
-git clone <repository-url>
-cd docker-dh
+git clone https://github.com/brahim-chahba/Job-recommendation-pipeline.git
+cd Job-recommendation-pipeline
+```
+
+Creer le fichier local de configuration :
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Sous macOS ou Linux :
+
+```bash
 cp .env.example .env
 ```
 
-Edit `.env` to set your credentials (France Travail API keys, source toggles, etc.).
+Modifier `.env` selon votre environnement. Ne jamais committer ce fichier ni y ajouter de vrais secrets.
 
-### 2. Initialize Airflow
-
-```bash
-docker compose up airflow-init
-```
-
-### 3. Start the stack
+### 2. Lancer les services de donnees et le pipeline
 
 ```bash
-docker compose up -d
+docker compose up -d postgres redis minio minio-init airflow-init airflow-apiserver airflow-scheduler airflow-worker airflow-dag-processor airflow-triggerer api
 ```
 
-This starts:
-- **Airflow** (API server, scheduler, worker, triggerer) on `http://localhost:8080`
-- **PostgreSQL** on port `5432`
-- **Redis** (Celery broker)
-- **MinIO** on `http://localhost:9000` (console: `http://localhost:9001`)
-- **FastAPI Analytics** on `http://localhost:8000`
-- **ML Matcher API** on `http://localhost:5001`
+Pour consulter l'etat des services :
 
-### 4. Start the frontend
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+| Service | Adresse locale |
+|---|---|
+| Interface Airflow | http://localhost:8081 |
+| API analytique FastAPI | http://localhost:8000 |
+| Documentation interactive FastAPI | http://localhost:8000/docs |
+| API de matching Flask | http://localhost:5001 |
+| MinIO | http://localhost:9000 |
+| Console MinIO | http://localhost:9001 |
+| PostgreSQL | localhost:5432 |
+
+L'initialisation de la base Airflow est geree par le service `airflow-init` de Compose. Dans Airflow, activer puis declencher le DAG `jobs_intelligence_pipeline` pour executer une premiere collecte.
+
+Cette commande omet volontairement `matcher-api` : son image Docker reference des fichiers qui ne sont pas presents dans le depot. L'interface web peut etre demarree, mais ses fonctions de recommandation necessitent de corriger et de lancer ce service, ainsi que de lui fournir un jeu de donnees.
+
+### 3. Lancer l'interface web
+
+Dans un autre terminal :
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-The React app runs on `http://localhost:5173` by default.
+Ouvrir l'adresse indiquee par Vite, generalement http://localhost:5173. L'interface appelle actuellement l'API de matching sur `http://localhost:5001`.
 
-### Default credentials
+Pour verifier le build et le lint de l'interface :
 
-| Service | Username | Password |
-|---------|----------|----------|
-| Airflow | `airflow` | `airflow` |
-| MinIO | `minioadmin` | `minioadmin123` |
-
----
+```bash
+cd frontend
+npm run build
+npm run lint
+```
 
 ## Configuration
 
-All settings are managed through environment variables (see `.env.example`):
+Les principaux reglages d'execution se trouvent dans [.env.example](.env.example) :
 
-### Source Toggles
+| Variable | Role |
+|---|---|
+| `ENABLE_JOBSPY` | Active ou desactive la collecte via JobSpy |
+| `ENABLE_INDEED` | Active ou desactive Indeed |
+| `ENABLE_LINKEDIN` | Active ou desactive LinkedIn |
+| `ENABLE_REKRUTE` | Active ou desactive Rekrute |
+| `ENABLE_EMPLOI_MA` | Active ou desactive Emploi.ma |
+| `ENABLE_FRANCE_TRAVAIL` | Active France Travail ; necessite les identifiants OAuth2 |
+| `FRANCE_TRAVAIL_CLIENT_ID` | Identifiant client France Travail |
+| `FRANCE_TRAVAIL_CLIENT_SECRET` | Secret client France Travail |
+| `ENABLE_MINIO_LAKE` | Active ou desactive l'ecriture dans MinIO |
+| `MINIO_ENDPOINT` | Adresse du service MinIO |
+| `MINIO_BUCKET` | Nom du bucket du data lake |
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENABLE_INDEED` | `1` | Enable Indeed scraping |
-| `ENABLE_LINKEDIN` | `1` | Enable LinkedIn scraping |
-| `ENABLE_REKRUTE` | `1` | Enable Rekrute scraping |
-| `ENABLE_EMPLOI_MA` | `1` | Enable Emploi.ma scraping |
-| `ENABLE_FRANCE_TRAVAIL` | `0` | Enable France Travail API (requires API keys) |
+Les valeurs de `.env.example` servent uniquement au developpement local. Remplacez les identifiants par defaut avant tout deploiement partage ou public.
 
-### MinIO / Lakehouse
+## API
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENABLE_MINIO_LAKE` | `1` | Enable lakehouse layer |
-| `MINIO_ENDPOINT` | `http://minio:9000` | MinIO endpoint |
-| `MINIO_BUCKET` | `jobs-lake` | Data lake bucket name |
+### API analytique — FastAPI, port 8000
 
-### France Travail API
+| Methode | Route | Description |
+|---|---|---|
+| `GET` | `/health` | Verifie la connexion a PostgreSQL |
+| `GET` | `/jobs` | Liste les offres ; filtres possibles : `category`, `city`, `country`, `remote`, `source`, `limit` |
+| `GET` | `/skills` | Competences les plus frequemment mentionnees |
+| `GET` | `/stats/category-city` | Repartition des offres par categorie et ville |
+| `GET` | `/stats/salary` | Statistiques salariales |
+| `GET` | `/pipeline-health` | Historique de sante du pipeline |
+| `GET` | `/lake-health` | Etat du data lake MinIO |
 
-| Variable | Description |
-|----------|-------------|
-| `FRANCE_TRAVAIL_CLIENT_ID` | OAuth2 client ID |
-| `FRANCE_TRAVAIL_CLIENT_SECRET` | OAuth2 client secret |
+Exemple :
 
----
-
-## API Reference
-
-### FastAPI Analytics Service (port 8000)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/jobs` | GET | List jobs with filters (`category`, `city`, `country`, `remote`, `source`, `limit`) |
-| `/skills` | GET | Top mentioned skills |
-| `/stats/category-city` | GET | Job counts by category and city |
-| `/stats/salary` | GET | Salary statistics |
-| `/pipeline-health` | GET | Pipeline run history |
-| `/lake-health` | GET | MinIO data lake status |
-
-### ML Matcher API (port 5001)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/match` | POST | Get ranked job matches for a given profile |
-| `/api/filters` | GET | Available filter values (cities, countries, skills, categories) |
-| `/api/retrain` | POST | Retrain the ML model on latest data |
-
----
-
-## ML Job Matcher
-
-The matching engine uses a two-stage approach:
-
-1. **TF-IDF + Cosine Similarity** - text-based relevance scoring between the user query and job descriptions
-2. **GradientBoostingClassifier** - supervised model trained on job features (skills, location, work mode) for category prediction and ranking
-
-**Features used:**
-- Extracted skills from job descriptions (matched against a 90+ skill database)
-- Location and work mode (remote/onsite/hybrid)
-- Job category classification
-- TF-IDF vectors on title + description
-
-The model loads data from the PostgreSQL Gold layer (`vw_latest_jobs`) at runtime, with a static JSON fallback.
-
----
-
-## Frontend
-
-The React frontend provides:
-
-- **Job search** by title, city, and work mode
-- **AI-ranked results** from the ML matcher API
-- **Filter options** loaded dynamically from the API (cities, countries, categories)
-- **Responsive design** for desktop and mobile
-- **Pagination** with 12 results per page
-
-Data sources displayed: LinkedIn, France Travail, Emploi.ma, Indeed.
-
----
-
-## Pipeline Details
-
-### Search Coverage
-
-The scraper targets 50+ job title variations across data engineering, analytics, cloud/DevOps, AI/ML, and software development roles. Searches run across multiple cities in Morocco and France.
-
-### Data Flow
-
-```
-Sources -> scrape_jobs (JSON file)
-        -> publish_to_lake (MinIO bronze layer)
-        -> load_raw (PostgreSQL raw_jobs)
-        -> upsert_dim_jobs (PostgreSQL dim_jobs with deduplication)
-        -> export_lake_curated (MinIO silver + gold layers)
-        -> log_run (pipeline_runs metadata)
+```text
+http://localhost:8000/jobs?city=Casablanca&remote=true&limit=20
 ```
 
-### Job Classification
+### API de matching — Flask, port 5001
 
-Jobs are automatically categorized into domains (Data Engineering, Data Science, Cloud/DevOps, Software Development, etc.) based on title pattern matching.
+| Methode | Route | Description |
+|---|---|---|
+| `GET` | `/api/health` | Etat du moteur et nombre d'offres chargees |
+| `GET` | `/api/filters` | Valeurs disponibles pour les filtres |
+| `POST` | `/api/match` | Classe les offres selon un profil |
+| `POST` | `/api/retrain` | Relance l'entrainement du modele |
 
----
+Exemple de corps JSON pour `POST /api/match` :
+
+```json
+{
+  "title": "Data Analyst",
+  "city": "Casablanca",
+  "country": "Morocco",
+  "work_mode": "remote",
+  "skills": ["python", "sql"],
+  "top_n": 20
+}
+```
+
+## Interface web
+
+L'application React est dans `frontend/`. Elle propose une recherche par poste, ville et mode de travail, puis affiche les recommandations renvoyees par l'API Flask. Les parametres de requete de l'interface sont actuellement definis dans `frontend/src/App.tsx`.
+
+## Depannage et limites connues
+
+- Les jeux de donnees et les modeles `.pkl` ne sont pas inclus dans le depot. Ils sont exclus par `.gitignore` ; fournir les donnees requises localement avant de lancer le moteur de matching.
+- Le demarrage du moteur de matching depend de la disponibilite de donnees utilisables dans PostgreSQL ou du fichier JSON de repli attendu par le modele.
+- L'image Docker du moteur de matching reference actuellement des fichiers absents du depot (`job_matcher_model.py` et `job_matcher_v2.pkl`). Un lancement complet de Compose depuis un clone vierge necessite donc de corriger cette image et de fournir les donnees ou le modele attendus.
+- Les variables `JOB_MATCHER_DATA_FILE` et `JOB_MATCHER_MODEL_FILE` presentes dans `.env.example` ne sont pas encore lues par le code du moteur.
+- France Travail reste desactive par defaut et ne peut fonctionner sans ses identifiants API.
+- Si un service ne demarre pas, consulter ses journaux avec `docker compose logs -f <nom-du-service>`.
+- Les ports `5432`, `8000`, `8081`, `9000`, `9001` et `5001` doivent etre libres sur la machine.
+
+## Contribution
+
+1. Creez une branche a partir de `main` pour chaque changement.
+2. Gardez les modifications ciblees et ajoutez ou mettez a jour les tests et la documentation associes.
+3. Avant d'ouvrir une pull request, lancez les verifications concernees (par exemple `npm run build` et `npm run lint` depuis `frontend/`).
+4. N'incluez jamais de secrets, de fichiers `.env`, d'exports de donnees ou de modeles entraines dans une pull request.

@@ -6,9 +6,8 @@ COPY requirements-matcher.txt /app/requirements-matcher.txt
 RUN pip install --no-cache-dir -r /app/requirements-matcher.txt
 
 COPY api_server.py /app/api_server.py
-COPY job_matcher_model.py /app/job_matcher_model.py
+COPY job_matcher_model_v2.py /app/job_matcher_model_v2.py
 COPY data /app/data
-COPY job_matcher_v2.pkl /app/job_matcher_v2.pkl
 
 ENV JOB_MATCHER_DATA_FILE=/app/data/jobs_manual__split_sources_2026_05_16.json
 ENV JOB_MATCHER_MODEL_FILE=/app/job_matcher_v2.pkl
